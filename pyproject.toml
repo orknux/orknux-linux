@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orknux-linux"
+version = "1.0.0"
+description = "Orknux for Linux: lends this Linux desktop to your Orknux agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "AGPL-3.0-only" }
+# PyGObject (gi) comes from the distribution - python3-gi with the Atspi and Gtk
+# typelibs - not from PyPI: see the README. pipx install --system-site-packages.
+dependencies = ["python-xlib>=0.33", "Pillow>=9"]
+
+[project.optional-dependencies]
+keyring = ["keyring>=24"]
+test = ["pytest>=7"]
+
+[project.scripts]
+orknux-linux = "orknux_linux.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

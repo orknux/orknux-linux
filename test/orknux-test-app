@@ -1,0 +1,25 @@
+#!/usr/bin/python3
+"""A window to drive: a heading, a button that says when it was pressed, and a text box."""
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk  # noqa: E402
+
+window = Gtk.Window(title="Orknux test app")
+window.set_default_size(420, 260)
+box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+box.set_margin_top(12)
+box.set_margin_start(12)
+box.set_margin_end(12)
+window.add(box)
+status = Gtk.Label(label="Not pressed yet")
+box.pack_start(status, False, False, 0)
+button = Gtk.Button(label="Press me")
+button.connect("clicked", lambda *_: status.set_text("Pressed"))
+box.pack_start(button, False, False, 0)
+entry = Gtk.Entry()
+box.pack_start(entry, False, False, 0)
+window.connect("destroy", Gtk.main_quit)
+window.show_all()
+Gtk.main()

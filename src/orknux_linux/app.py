@@ -1,0 +1,207 @@
+"""The window a person connects from, and the strip that says an agent is at work.
+
+GTK 3 rather than 4: GTK 4 cannot place a window, and the notice strip has to
+stand at the top of the screen over everything, which is what GTK 3's
+keep-above and move are for. The connection runs on a thread of its own; every
+change to the window goes back through GLib.idle_add.
+"""
+
+import threading
+import time
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+
+from . import VERSION  # noqa: E402
+from .cli import connect  # noqa: E402
+from .core.errors import ConnectionRefused  # noqa: E402
+from .settings import Settings  # noqa: E402
+
+HELP = ("Paste the pairing link from Orknux - Preferences › Connected clients › Connect a client - and press Connect. "
+        "An access token with the server address works too. Your agents act on this computer as you while it is "
+        "connected. Ctrl+Alt+Q stops them at any time.")
+
+
+class Notice(Gtk.Window):
+    """A strip along the top of the screen while an agent is acting, so nobody is surprised by their own mouse."""
+
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.POPUP)
+        self.set_keep_above(True)
+        self.set_accept_focus(False)
+        label = Gtk.Label(label="An Orknux agent is using this computer - Ctrl+Alt+Q stops it")
+        label.set_margin_top(6)
+        label.set_margin_bottom(6)
+        label.set_margin_start(16)
+        label.set_margin_end(16)
+        self.add(label)
+        css = Gtk.CssProvider()
+        css.load_from_data(b"window { background: #4a66c4; color: white; font-weight: bold; }")
+        self.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        label.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self._hide_at = 0.0
+
+    def acting(self):
+        self.show_all()
+        screen = Gdk.Screen.get_default()
+        width = self.get_preferred_width()[1]
+        self.move(max(0, (screen.get_width() - width) // 2), 0)
+        self._hide_at = 0.0
+
+    def done(self):
+        # A moment after the last action rather than at once, so a run of actions does not flicker the strip.
+        self._hide_at = time.monotonic() + 1.5
+        GLib.timeout_add(1600, self._maybe_hide)
+
+    def _maybe_hide(self):
+        if self._hide_at and time.monotonic() >= self._hide_at:
+            self.hide()
+        return False
+
+
+class MainWindow(Gtk.Window):
+    def __init__(self):
+        super().__init__(title=f"Orknux for Linux {VERSION}")
+        self.set_default_size(460, 560)
+        self.settings = Settings.load()
+        self.connection = None
+        self.notice = Notice()
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(16)
+        box.set_margin_bottom(16)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+        self.add(box)
+
+        box.pack_start(Gtk.Label(label="Pairing link or server", xalign=0), False, False, 0)
+        self.server = Gtk.Entry(text=self.settings.server, placeholder_text="https://orknux.example.com/pair/K7P-4QX")
+        box.pack_start(self.server, False, False, 0)
+        box.pack_start(Gtk.Label(label="Access token, if not a pairing link", xalign=0), False, False, 0)
+        self.token = Gtk.Entry(visibility=False, text=self.settings.token, placeholder_text="orkx_…")
+        box.pack_start(self.token, False, False, 0)
+        help_label = Gtk.Label(label=HELP, xalign=0, wrap=True)
+        help_label.get_style_context().add_class("dim-label")
+        box.pack_start(help_label, False, False, 6)
+
+        row = Gtk.Box(spacing=12)
+        self.connect_button = Gtk.Button(label="Connect")
+        self.connect_button.connect("clicked", lambda *_: self.start())
+        self.disconnect_button = Gtk.Button(label="Disconnect")
+        self.disconnect_button.connect("clicked", lambda *_: self.stop("Disconnected.", by_person=True))
+        self.state = Gtk.Label(label="Not connected", xalign=0)
+        row.pack_start(self.connect_button, False, False, 0)
+        row.pack_start(self.disconnect_button, False, False, 0)
+        row.pack_start(self.state, False, False, 0)
+        box.pack_start(row, False, False, 6)
+        self.message = Gtk.Label(xalign=0, wrap=True)
+        box.pack_start(self.message, False, False, 0)
+
+        box.pack_start(Gtk.Label(label="WHAT YOUR AGENTS DID", xalign=0), False, False, 6)
+        self.log_store = Gtk.ListStore(str)
+        log_view = Gtk.TreeView(model=self.log_store, headers_visible=False)
+        log_view.append_column(Gtk.TreeViewColumn("", Gtk.CellRendererText(), text=0))
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.add(log_view)
+        box.pack_start(scrolled, True, True, 0)
+
+        self.connect("destroy", lambda *_: self.quit())
+        self.show_all()
+        self.disconnect_button.hide()
+        try:
+            from .desktop.x11 import StopHotkey
+
+            StopHotkey(lambda: GLib.idle_add(self.stop, "Stopped with Ctrl+Alt+Q.", True))
+        except Exception as failed:
+            self.say(f"Ctrl+Alt+Q could not be claimed: {failed}")
+        # Connected when it last ran, and not disconnected since: connect again by itself, as it was.
+        if self.settings.reconnect and self.settings.server and self.settings.token:
+            GLib.idle_add(self.start)
+
+    # ---- the log and the state ----
+
+    def log(self, line: str, failed: bool):
+        GLib.idle_add(lambda: (self.log_store.prepend([time.strftime("%H:%M:%S") + "  " + ("! " if failed else "") + line]), False)[1])
+
+    def set_state(self, said: str):
+        GLib.idle_add(lambda: (self.state.set_text(said), False)[1])
+
+    def say(self, text: str):
+        self.message.set_text(text)
+
+    def busy(self, on: bool):
+        GLib.idle_add(lambda: (self.notice.acting() if on else self.notice.done(), False)[1])
+
+    def showing(self, connected: bool):
+        self.connect_button.set_visible(not connected)
+        self.disconnect_button.set_visible(connected)
+        self.server.set_sensitive(not connected)
+        self.token.set_sensitive(not connected)
+
+    # ---- connecting ----
+
+    def start(self):
+        self.say("")
+        self.state.set_text("Connecting…")
+        self.connect_button.set_sensitive(False)
+        server, secret = self.server.get_text(), self.token.get_text()
+
+        def work():
+            try:
+                connection, user = connect(server, secret, self.settings, log=lambda line: None)
+            except ConnectionRefused as refused:
+                GLib.idle_add(self._refused, str(refused))
+                return
+            connection.log, connection.state, connection.busy = self.log, self.set_state, self.busy
+            GLib.idle_add(self._connected, connection, user)
+            connection.run()
+            if not connection.stopped.is_set():
+                GLib.idle_add(self.stop, "The server stopped accepting this computer.")
+
+        threading.Thread(target=work, daemon=True).start()
+        return False
+
+    def _refused(self, said: str):
+        self.connect_button.set_sensitive(True)
+        self.state.set_text("Not connected")
+        self.say(said)
+        return False
+
+    def _connected(self, connection, user: str):
+        self.connection = connection
+        self.connect_button.set_sensitive(True)
+        self.server.set_text(connection.server)
+        self.token.set_text(self.settings.token)
+        self.showing(True)
+        self.state.set_text(f"Connected as {user}")
+        self.log(f"Connected to {connection.server} as {user}", False)
+        return False
+
+    def stop(self, reason: str | None, by_person: bool = False):
+        if by_person and self.settings.reconnect:
+            self.settings.reconnect = False
+            self.settings.save()
+        if self.connection is not None:
+            self.connection.stop()
+            self.connection = None
+        self.notice.hide()
+        self.showing(False)
+        self.state.set_text("Not connected")
+        if reason:
+            self.say(reason)
+            self.log(reason, False)
+        return False
+
+    def quit(self):
+        if self.connection is not None:
+            self.connection.stop()
+        Gtk.main_quit()
+
+
+def run_window() -> int:
+    MainWindow()
+    Gtk.main()
+    return 0

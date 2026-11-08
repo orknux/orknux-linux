@@ -6,6 +6,7 @@ on this computer: the server is only ever answered.
 """
 
 import json
+import socket
 import threading
 import time
 import urllib.error
@@ -102,7 +103,9 @@ class Connection:
 
     def run(self):
         """Polls until stopped, or until the server stops accepting the credential."""
-        path = f"/api/desktop/next?wait={WAIT_SECONDS}&client=Linux&version={urllib.parse.quote(self.version)}"
+        # Which computer this is, by the name an agent chooses it by when the person has more than one connected.
+        path = (f"/api/desktop/next?wait={WAIT_SECONDS}&client=Linux&version={urllib.parse.quote(self.version)}"
+                f"&instance={urllib.parse.quote('Linux on ' + socket.gethostname())}")
         while not self.stopped.is_set():
             try:
                 status, body = self._request("GET", path, timeout=WAIT_SECONDS + 20)

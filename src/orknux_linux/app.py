@@ -271,6 +271,13 @@ class MainWindow(Gtk.Window):
         self.showing(True)
         self.state.set_text(f"Connected as {user}")
         self.log(f"Connected to {connection.server} as {user}", False)
+        # On Wayland the desktop asks once whether to allow remote interaction: asked now, while the person who
+        # pressed Connect is at the screen, rather than the first time an agent clicks, when they may be away.
+        remote = getattr(getattr(connection.runner, "x", None), "remote", None)
+        if remote is not None:
+            remote.begin()
+            self.say("Your desktop may ask whether to allow remote interaction: press Share, with Remember This "
+                     "Selection ticked, so your agents can click and type here.")
         return False
 
     def stop(self, reason: str | None, by_person: bool = False):

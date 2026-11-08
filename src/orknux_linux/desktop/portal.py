@@ -40,6 +40,9 @@ BUTTONS = {1: 0x110, 2: 0x112, 3: 0x111}
 # How long a person is given to answer the desktop's question.
 ASKING_SECONDS = 180
 
+# How long a call waits on that question before the agent is told it is being asked.
+CONSENT_WAIT = 15
+
 _tokens = itertools.count(1)
 
 
@@ -185,13 +188,56 @@ class RemoteControl:
         self.save_token = save_token
         self.session: str | None = None
         self.devices = 0
+        # The first session is asked of the person on this computer's screen, and they may not be there: it is
+        # made in the background, waited on for a moment, and kept waiting for while the agent is told why.
+        self._starting: threading.Thread | None = None
+        self._failed: Exception | None = None
         self.streams: list[tuple[int, int, int, int, int]] = []  # node, x, y, width, height - logical pixels
         self._lock = threading.RLock()
 
     def available(self) -> bool:
         return self.portal.version(REMOTE) >= 1
 
-    def ensure(self):
+    def begin(self):
+        """Starts asking for the session, where nothing is asked yet: at connect, while the person is at the screen."""
+        with self._lock:
+            if self.session is not None or (self._starting is not None and self._starting.is_alive()):
+                return
+            self._failed = None
+
+            def start():
+                try:
+                    self._make()
+                except Exception as failed:  # noqa: BLE001 - kept for the call waiting on it
+                    self._failed = failed
+
+            self._starting = threading.Thread(target=start, daemon=True, name="remote-desktop")
+            self._starting.start()
+
+    def ensure(self, wait: float = CONSENT_WAIT):
+        """
+        The session, made if need be. Where the desktop is still asking the person,
+        this waits [wait] seconds and then says so rather than hold the call: the
+        question stays on their screen, and the call after they answer works.
+        """
+        if self.session is not None:
+            return
+        self.begin()
+        starting = self._starting
+        if starting is not None:
+            starting.join(wait)
+        if self.session is not None:
+            return
+        if starting is not None and starting.is_alive():
+            raise Refused("This computer's desktop is asking the person, on its own screen, whether to allow remote "
+                          "interaction (GNOME's Remote Desktop question), and nobody has answered yet. Ask them to "
+                          "press Share there, with Remember This Selection ticked, then try again. Reading windows "
+                          "with desktop_windows and desktop_snapshot works meanwhile.")
+        failed, self._failed = self._failed, None
+        if failed is not None:
+            raise failed
+
+    def _make(self):
         with self._lock:
             if self.session is not None:
                 return

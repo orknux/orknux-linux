@@ -60,6 +60,32 @@ else echo "FAIL a second start: $again, Remote Desktop asked $asked more times";
 kill $client 2>/dev/null
 kill $consent 2>/dev/null
 
+echo "== nobody at the screen"
+# A fresh start with no kept answer, and nobody to press Share: the call is refused in words within the wait,
+# and the computer stays connected - reading still works while the question waits on the screen.
+kill $consent 2>/dev/null
+export XDG_CONFIG_HOME=/tmp/home/away && mkdir -p $XDG_CONFIG_HOME
+python3 -m orknux_linux.cli --headless --no-hotkey --link "http://127.0.0.1:$PORT/pair/abc-def" >/tmp/client3.log 2>&1 &
+client=$!
+for _ in $(seq 100); do grep -q "Connected" /tmp/client3.log && break; sleep 0.1; done
+away=$(python3 - "$PORT" <<'PY'
+import json, sys, time, urllib.request
+def run(action, **arguments):
+    r = urllib.request.Request(f"http://127.0.0.1:{sys.argv[1]}/test/run", json.dumps({"action": action, "arguments": arguments}).encode(), {"Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(r, timeout=200).read())
+began = time.monotonic()
+pressed = run("press", keys="Escape")
+took = time.monotonic() - began
+listed = run("windows")
+print(json.dumps({"took": round(took, 1), "pressed": pressed, "listed": "result" in listed}))
+PY
+)
+echo "$away" | cut -c1-300
+if echo "$away" | python3 -c "import json,sys; a=json.load(sys.stdin); sys.exit(0 if a['took'] < 25 and 'Share' in a['pressed'].get('error','') and a['listed'] else 1)"; then
+  echo "PASS with nobody to answer, the call says what to ask for, and the computer stays connected"
+else echo "FAIL nobody at the screen: $away"; hotkey=1; fi
+kill $client 2>/dev/null
+
 if [ $drive -eq 0 ] && [ $hotkey -eq 0 ]; then echo "ALL WAYLAND CHECKS PASSED"; exit 0; fi
 echo "CLIENT LOG:"; cat /tmp/client.log
 exit 1

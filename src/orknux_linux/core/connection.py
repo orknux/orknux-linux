@@ -6,6 +6,7 @@ on this computer: the server is only ever answered.
 """
 
 import json
+import queue
 import socket
 import threading
 import time
@@ -57,6 +58,7 @@ class Connection:
         self.state = state
         self.busy = busy
         self.stopped = threading.Event()
+        self._commands: queue.Queue = queue.Queue()
 
     # ---- HTTP ----
 
@@ -128,7 +130,26 @@ class Connection:
             self.state("Connected")
             command = self._read(body)
             if command is not None:
+                # Done on the worker, in the order they came, while this goes on asking: a command that waits - on
+                # the desktop asking the person something, on a slow window - must not stop the polling, or the
+                # server stops counting this computer as connected and the agent is told it has gone.
+                self._commands.put(command)
+                self._start_worker()
+
+    def _start_worker(self):
+        if getattr(self, "_worker", None) is not None and self._worker.is_alive():
+            return
+
+        def work():
+            while not self.stopped.is_set():
+                try:
+                    command = self._commands.get(timeout=1)
+                except queue.Empty:
+                    continue
                 self._perform(*command)
+
+        self._worker = threading.Thread(target=work, daemon=True, name="orknux-commands")
+        self._worker.start()
 
     def stop(self):
         self.stopped.set()

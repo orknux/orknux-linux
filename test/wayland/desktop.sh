@@ -12,7 +12,7 @@ pipewire >/tmp/pipewire.log 2>&1 &
 sleep 0.5
 wireplumber >/tmp/wireplumber.log 2>&1 &
 /usr/libexec/at-spi-bus-launcher --launch-immediately >/tmp/atspi.log 2>&1 &
-gnome-shell --headless --wayland --no-x11 --virtual-monitor 1280x800 >/tmp/shell.log 2>&1 &
+gnome-shell --headless --wayland --no-x11 --virtual-monitor 1280x800 ${GNOME_SHELL_FLAGS:-} >/tmp/shell.log 2>&1 &
 for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break; sleep 0.1; done
 export WAYLAND_DISPLAY=wayland-0
 dbus-update-activation-environment WAYLAND_DISPLAY

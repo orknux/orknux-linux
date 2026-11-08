@@ -23,6 +23,10 @@ orknux-linux = "orknux_linux.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# python-xlib and six, shipped inside for an X11 desktop that lacks them (src/orknux_linux/_vendor).
+[tool.setuptools.package-data]
+orknux_linux = ["_vendor/**/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

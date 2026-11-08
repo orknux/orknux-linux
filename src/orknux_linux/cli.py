@@ -78,7 +78,7 @@ def claim_stop_key(pressed) -> str | None:
         try:
             from .desktop import x11
         except ImportError:
-            return "python3-xlib is not installed, which an X11 desktop needs: sudo apt install python3-xlib"
+            return "the python-xlib that comes with Orknux for Linux is missing: install Orknux for Linux again"
         x11.StopHotkey(pressed)
         return None
     except Exception as failed:  # noqa: BLE001

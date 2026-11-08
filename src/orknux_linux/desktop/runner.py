@@ -452,6 +452,6 @@ def make_runner(display_name: str | None = None, settings=None) -> Runner:
     try:
         from . import x11
     except ImportError:
-        raise Refused("This is an X11 desktop, and python3-xlib, which drives one, is not installed: "
-                      "sudo apt install python3-xlib") from None
+        raise Refused("This is an X11 desktop, and the python-xlib that comes with Orknux for Linux to drive one is "
+                      "missing from this installation: install Orknux for Linux again.") from None
     return Runner(x11.X11(display_name))

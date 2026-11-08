@@ -52,14 +52,15 @@ and Ubuntu:
 
 ```
 sudo apt install python3-gi gir1.2-atspi-2.0 gir1.2-gtk-3.0 at-spi2-core \
-                 python3-xlib python3-pil xclip pipx \
+                 python3-pil xclip pipx \
                  gir1.2-gstreamer-1.0 gstreamer1.0-pipewire
 pipx install --system-site-packages ./orknux-linux
 ```
 
 `--system-site-packages` is what lets it see `python3-gi`, which is not on
 PyPI. The GStreamer packages are what a Wayland screenshot is read with, and
-are on every Ubuntu desktop already; `python3-xlib` and `xclip` are for X11. `xclip` is needed for text with letters past ASCII (ą, ż, ñ), which is
+are on every Ubuntu desktop already; `xclip` is for X11. python-xlib, which an
+X11 desktop is driven with, comes inside Orknux for Linux. `xclip` is needed for text with letters past ASCII (ą, ż, ñ), which is
 pasted rather than typed and your clipboard's text put back afterwards.
 `pipx inject orknux-linux keyring` keeps the credential in your desktop's
 keyring; without it, it is in `~/.config/orknux/credential`, readable only by you.

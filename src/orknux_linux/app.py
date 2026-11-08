@@ -143,6 +143,10 @@ class MainWindow(Gtk.Window):
         box.pack_start(self.server, False, False, 0)
         box.pack_start(Gtk.Label(label="Access token, if not a pairing link", xalign=0), False, False, 0)
         self.token = Gtk.Entry(visibility=False, text=self.settings.token, placeholder_text="orkx_…")
+        # An eye at the end of the box shows what was pasted and hides it again: a token is checked by reading it.
+        self.token.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "view-reveal-symbolic")
+        self.token.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, "Show the token")
+        self.token.connect("icon-press", lambda *_: self._toggle_token())
         box.pack_start(self.token, False, False, 0)
         help_label = Gtk.Label(label=HELP, xalign=0, wrap=True)
         help_label.get_style_context().add_class("dim-label")
@@ -173,6 +177,10 @@ class MainWindow(Gtk.Window):
         self.show_all()
         self.disconnect_button.hide()
         from .cli import accessibility_on, claim_stop_key
+        from .desktop.session import SSH_WARNING, forwarded_over_ssh
+
+        if forwarded_over_ssh():
+            self.say(SSH_WARNING)
 
         accessibility_on()
         claim = threading.Thread(target=lambda: self._claimed(claim_stop_key(
@@ -181,6 +189,12 @@ class MainWindow(Gtk.Window):
         # Connected when it last ran, and not disconnected since: connect again by itself, as it was.
         if self.settings.reconnect and self.settings.server and self.settings.token:
             GLib.idle_add(self.start)
+
+    def _toggle_token(self):
+        shown = not self.token.get_visibility()
+        self.token.set_visibility(shown)
+        self.token.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "view-conceal-symbolic" if shown else "view-reveal-symbolic")
+        self.token.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, "Hide the token" if shown else "Show the token")
 
     def _claimed(self, said: str | None):
         if said:
@@ -219,6 +233,10 @@ class MainWindow(Gtk.Window):
                 connection, user = connect(server, secret, self.settings, log=lambda line: None)
             except ConnectionRefused as refused:
                 GLib.idle_add(self._refused, str(refused))
+                return
+            except Exception as failed:  # noqa: BLE001
+                # Anything else is said too: a thread that died quietly left the window saying "Connecting…" for ever.
+                GLib.idle_add(self._refused, f"Could not connect: {failed}")
                 return
             connection.log, connection.state, connection.busy = self.log, self.set_state, self.busy
             GLib.idle_add(self._connected, connection, user)

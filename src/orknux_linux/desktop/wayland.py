@@ -31,6 +31,8 @@ from .portal import Portal, RemoteControl, screenshot_file  # noqa: E402
 
 SETTLE = 0.2
 OVERVIEW_WAIT = 0.8
+OVERVIEW_CLOSE = 0.7
+FIELD_WAIT = 1.0
 FOREGROUND_WAIT = 1.2
 KEY_GAP = 0.006
 
@@ -144,15 +146,33 @@ class Wayland:
         if atspi.has_state(frame, "ACTIVE"):
             return True
         names = self._app_names(wid, frame)
-        if not self._click_launcher(names):
-            self.chord(["Super_L"])
-            time.sleep(OVERVIEW_WAIT)
+        overview = False
+        came = False
+        # A click in an overview that is still opening can come to nothing, so a second one is tried; and an
+        # overview left open is closed, or it keeps the keyboard and the next keys go into its search box.
+        for _ in range(2):
             if not self._click_launcher(names):
-                self.chord(["Escape"])
-                return False
-        came = wait_for(lambda: atspi.has_state(frame, "ACTIVE"), FOREGROUND_WAIT, 0.05)
-        time.sleep(0.15)
+                if overview:
+                    break
+                self.chord(["Super_L"])
+                overview = True
+                time.sleep(OVERVIEW_WAIT)
+                if not self._click_launcher(names):
+                    break
+            came = wait_for(lambda: atspi.has_state(frame, "ACTIVE"), FOREGROUND_WAIT, 0.05)
+            if came:
+                break
+            time.sleep(0.3)
+        if not came and self._shell_has_keyboard():
+            self.chord(["Escape"])
+        # The window is active before the overview has finished going: keys sent then land in its search box.
+        time.sleep(OVERVIEW_CLOSE if overview else 0.15)
         return came
+
+    def _shell_has_keyboard(self) -> bool:
+        """Whether GNOME Shell's own stage - the overview, a dialog of its own - is what has the keyboard."""
+        stage = self._shell_stage()
+        return stage is not None and atspi.has_state(stage, "ACTIVE")
 
     def _app_names(self, wid: int, frame) -> set[str]:
         names = set()
@@ -264,9 +284,14 @@ class Wayland:
         for code in reversed(codes):
             self.remote.key(code, False)
 
-    def _focused_field(self):
-        """The field that has the keyboard in the active window, where it takes text through accessibility."""
-        wid = self.active()
+    def _focused_field(self, wid: int | None = None):
+        """
+        The field that has the keyboard in [wid] - or in the active window - where
+        it takes text through accessibility. Asked of the window itself rather than
+        of the desktop's focus, which is not settled for a moment after a window
+        comes forward.
+        """
+        wid = wid if wid is not None else self.active()
         if wid is None:
             return None
         for element in atspi.walk(self.frame(wid), 30):
@@ -274,7 +299,7 @@ class Wayland:
                 return element
         return None
 
-    def type_text(self, text: str) -> str:
+    def type_text(self, text: str, wid: int | None = None) -> str:
         """
         Into the field with the keyboard: inserted at its caret through
         accessibility, which takes any letter - the virtual keyboard types only
@@ -282,7 +307,10 @@ class Wayland:
         since they mean something to the window. Where no field takes text so,
         all of it as keys. Says which.
         """
-        field = self._focused_field()
+        # A window just brought forward reports its focused field a moment after it reports itself active.
+        found: list = []
+        wait_for(lambda: bool(found.append(self._focused_field(wid)) or found[-1] is not None), FIELD_WAIT, 0.05)
+        field = found[-1] if found else None
         if field is not None:
             for index, part in enumerate(text.replace("\t", "\n\t\n").split("\n")):
                 if index and part != "\t":

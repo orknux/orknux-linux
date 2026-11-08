@@ -83,7 +83,17 @@ check(value == "zażółć gęślą jaźń i więcej", "append keeps what was th
 atspi.grab_focus(element)
 time.sleep(0.3)
 run("press", keys="End", window=window)
+def state(label):
+    seen = []
+    for _, frame in atspi.frames():
+        focused = [f"{atspi.role_of(e)}:{atspi.name_of(e)!r}" for e in atspi.walk(frame, 30) if atspi.has_state(e, "FOCUSED")]
+        seen.append(f"{atspi.name_of(frame)!r} active={atspi.has_state(frame, 'ACTIVE')} focused={focused}")
+    print(f"STATE {label}: " + " | ".join(seen), flush=True)
+
+
+state("before typing")
 keyed = run("type", text=" +ok ą", window=window)
+state("after typing")
 time.sleep(0.3)
 value, _ = entry_text()
 check(value == "zażółć gęślą jaźń i więcej +ok ą" and "caret" in keyed.get("result", {}).get("how", ""),

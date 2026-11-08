@@ -322,7 +322,7 @@ class Runner:
             self._front(self._window(args))
         how = "typed"
         if self.wayland:
-            how = self.x.type_text(typed)
+            how = self.x.type_text(typed, number(args, "window") if number(args, "window") is not None else self.last)
         elif clipboard.needed(typed):
             if not clipboard.available():
                 raise Refused("This text has letters past ASCII, which are pasted rather than typed, and xclip is not "
@@ -449,6 +449,9 @@ def make_runner(display_name: str | None = None, settings=None) -> Runner:
                 settings.save()
 
         return Runner(Wayland(settings.portal_token if settings is not None else None, save_token), wayland=True)
-    from . import x11
-
+    try:
+        from . import x11
+    except ImportError:
+        raise Refused("This is an X11 desktop, and python3-xlib, which drives one, is not installed: "
+                      "sudo apt install python3-xlib") from None
     return Runner(x11.X11(display_name))

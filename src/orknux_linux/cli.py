@@ -17,7 +17,7 @@ import threading
 from . import VERSION
 from .core import pairing
 from .core.connection import Connection
-from .core.errors import ConnectionRefused
+from .core.errors import ConnectionRefused, Refused
 from .settings import Settings
 
 
@@ -30,7 +30,12 @@ def connect(server: str, secret: str, settings: Settings, log=print) -> tuple[Co
         raise ConnectionRefused("Paste the pairing link from Orknux: Preferences › Connected clients › Connect a client.")
     if is_code:
         secret = pairing.trade(server, secret)
-    connection = Connection(server, secret, VERSION, make_runner(settings=settings), log=lambda line, failed: log(("! " if failed else "") + line))
+    try:
+        runner = make_runner(settings=settings)
+    except Refused as refused:
+        # Nothing to lend the server: said where the person connects, rather than lost on the connecting thread.
+        raise ConnectionRefused(str(refused)) from None
+    connection = Connection(server, secret, VERSION, runner, log=lambda line, failed: log(("! " if failed else "") + line))
     user = connection.hello()
     settings.server, settings.token, settings.reconnect = server, secret, True
     settings.save()
@@ -70,8 +75,10 @@ def claim_stop_key(pressed) -> str | None:
             return shortcut.failed
         if not os.environ.get("DISPLAY"):
             return "there is no display"
-        from .desktop import x11
-
+        try:
+            from .desktop import x11
+        except ImportError:
+            return "python3-xlib is not installed, which an X11 desktop needs: sudo apt install python3-xlib"
         x11.StopHotkey(pressed)
         return None
     except Exception as failed:  # noqa: BLE001
@@ -79,6 +86,10 @@ def claim_stop_key(pressed) -> str | None:
 
 
 def headless(arguments) -> int:
+    from .desktop.session import SSH_WARNING, forwarded_over_ssh
+
+    if forwarded_over_ssh():
+        print(f"! {SSH_WARNING}", file=sys.stderr)
     accessibility_on()
     settings = Settings.load()
     server = arguments.link or arguments.server or os.environ.get("ORKNUX_SERVER") or settings.server

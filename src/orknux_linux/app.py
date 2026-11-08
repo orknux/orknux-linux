@@ -62,13 +62,74 @@ class Notice(Gtk.Window):
         return False
 
 
+def _wayland() -> bool:
+    from .desktop.session import session_is_wayland
+
+    return session_is_wayland()
+
+
+class Notification:
+    """
+    The strip's place on Wayland, where a window cannot put itself at the top
+    of the screen: one desktop notification while an agent acts, withdrawn a
+    moment after it stops. GNOME also shows its own remote-control icon in the
+    top bar for as long as the agent holds the keyboard and pointer.
+    """
+
+    def __init__(self):
+        from gi.repository import Gio
+
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.shown = 0
+        self._hide_at = 0.0
+
+    def acting(self):
+        from gi.repository import Gio
+
+        self._hide_at = 0.0
+        if self.shown:
+            return
+        try:
+            reply = self.bus.call_sync(
+                "org.freedesktop.Notifications", "/org/freedesktop/Notifications", "org.freedesktop.Notifications",
+                "Notify", GLib.Variant("(susssasa{sv}i)", (
+                    "Orknux for Linux", 0, "", "An Orknux agent is using this computer",
+                    "Ctrl+Alt+Q stops it at once.", [], {"urgency": GLib.Variant("y", 1)}, 0)),
+                None, Gio.DBusCallFlags.NONE, 2000, None)
+            self.shown = reply.unpack()[0]
+        except Exception:
+            self.shown = 0
+
+    def done(self):
+        self._hide_at = time.monotonic() + 1.5
+        GLib.timeout_add(1600, self._maybe_hide)
+
+    def _maybe_hide(self):
+        if self._hide_at and time.monotonic() >= self._hide_at:
+            self.hide()
+        return False
+
+    def hide(self):
+        from gi.repository import Gio
+
+        if not self.shown:
+            return
+        try:
+            self.bus.call_sync("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+                               "org.freedesktop.Notifications", "CloseNotification", GLib.Variant("(u)", (self.shown,)),
+                               None, Gio.DBusCallFlags.NONE, 2000, None)
+        except Exception:
+            pass
+        self.shown = 0
+
+
 class MainWindow(Gtk.Window):
     def __init__(self):
         super().__init__(title=f"Orknux for Linux {VERSION}")
         self.set_default_size(460, 560)
         self.settings = Settings.load()
         self.connection = None
-        self.notice = Notice()
+        self.notice = Notice() if not _wayland() else Notification()
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_margin_top(16)
@@ -111,15 +172,19 @@ class MainWindow(Gtk.Window):
         self.connect("destroy", lambda *_: self.quit())
         self.show_all()
         self.disconnect_button.hide()
-        try:
-            from .desktop.x11 import StopHotkey
+        from .cli import accessibility_on, claim_stop_key
 
-            StopHotkey(lambda: GLib.idle_add(self.stop, "Stopped with Ctrl+Alt+Q.", True))
-        except Exception as failed:
-            self.say(f"Ctrl+Alt+Q could not be claimed: {failed}")
+        accessibility_on()
+        claim = threading.Thread(target=lambda: self._claimed(claim_stop_key(
+            lambda: GLib.idle_add(self.stop, "Stopped with Ctrl+Alt+Q.", True))), daemon=True)
+        claim.start()
         # Connected when it last ran, and not disconnected since: connect again by itself, as it was.
         if self.settings.reconnect and self.settings.server and self.settings.token:
             GLib.idle_add(self.start)
+
+    def _claimed(self, said: str | None):
+        if said:
+            GLib.idle_add(lambda: (self.say(f"Ctrl+Alt+Q could not be claimed: {said}"), False)[1])
 
     # ---- the log and the state ----
 
@@ -196,8 +261,11 @@ class MainWindow(Gtk.Window):
         return False
 
     def quit(self):
+        from .cli import accessibility_back
+
         if self.connection is not None:
             self.connection.stop()
+        accessibility_back()
         Gtk.main_quit()
 
 

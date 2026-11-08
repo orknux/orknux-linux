@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orknux-linux"
-version = "1.0.0"
+version = "1.1.0"
 description = "Orknux for Linux: lends this Linux desktop to your Orknux agents"
 readme = "README.md"
 requires-python = ">=3.11"

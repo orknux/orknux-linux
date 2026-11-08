@@ -48,9 +48,10 @@ echo "== the window"
 timeout 5 python3 -c "
 import gi; gi.require_version('Gtk','3.0')
 from gi.repository import Gtk, GLib
+from orknux_linux import VERSION
 from orknux_linux.app import MainWindow
 w = MainWindow(); title = w.get_title(); GLib.timeout_add(500, Gtk.main_quit); Gtk.main()
-print('PASS the window opens, titled', title) if title.endswith('1.0.0') else print('FAIL the window title', title)
+print('PASS the window opens, titled', title) if title.endswith(VERSION) else print('FAIL the window title', title)
 " 2>&1 | grep -E "PASS|FAIL|Error" | head -3
 
 if [ $unit -eq 0 ] && [ $drive -eq 0 ] && [ $hotkey -eq 0 ]; then echo "ALL CHECKS PASSED"; exit 0; fi

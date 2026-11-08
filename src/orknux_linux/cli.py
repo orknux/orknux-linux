@@ -30,14 +30,56 @@ def connect(server: str, secret: str, settings: Settings, log=print) -> tuple[Co
         raise ConnectionRefused("Paste the pairing link from Orknux: Preferences › Connected clients › Connect a client.")
     if is_code:
         secret = pairing.trade(server, secret)
-    connection = Connection(server, secret, VERSION, make_runner(), log=lambda line, failed: log(("! " if failed else "") + line))
+    connection = Connection(server, secret, VERSION, make_runner(settings=settings), log=lambda line, failed: log(("! " if failed else "") + line))
     user = connection.hello()
     settings.server, settings.token, settings.reconnect = server, secret, True
     settings.save()
     return connection, user
 
 
+_accessibility_was: list = []
+
+
+def accessibility_on():
+    """Every program started from now on publishes what it shows; put back as it was on the way out."""
+    from .desktop import atspi
+
+    _accessibility_was.append(atspi.enable_accessibility())
+
+
+def accessibility_back():
+    from .desktop import atspi
+
+    if _accessibility_was and _accessibility_was[0] is False:
+        try:
+            atspi.set_accessibility(False)
+        except Exception:
+            pass
+
+
+def claim_stop_key(pressed) -> str | None:
+    """Ctrl+Alt+Q: grabbed on X11, through the GlobalShortcuts portal on Wayland. Why not, or None."""
+    from .desktop.session import session_is_wayland
+
+    try:
+        if session_is_wayland():
+            from .desktop.portal import StopShortcut
+
+            shortcut = StopShortcut(pressed)
+            shortcut.ready.wait(200)
+            return shortcut.failed
+        if not os.environ.get("DISPLAY"):
+            return "there is no display"
+        from .desktop import x11
+
+        x11.StopHotkey(pressed)
+        return None
+    except Exception as failed:  # noqa: BLE001
+        return str(failed)
+
+
 def headless(arguments) -> int:
+    accessibility_on()
     settings = Settings.load()
     server = arguments.link or arguments.server or os.environ.get("ORKNUX_SERVER") or settings.server
     secret = arguments.token or os.environ.get("ORKNUX_TOKEN") or ("" if arguments.link else settings.token)
@@ -53,23 +95,23 @@ def headless(arguments) -> int:
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    if not arguments.no_hotkey and os.environ.get("DISPLAY"):
-        from .desktop.x11 import StopHotkey
-
+    if not arguments.no_hotkey:
         def pressed():
             print("Stopped with Ctrl+Alt+Q.", flush=True)
             settings.reconnect = False
             settings.save()
             connection.stop()
 
-        try:
-            StopHotkey(pressed)
-        except Exception as failed:
-            print(f"! Ctrl+Alt+Q could not be claimed: {failed}", file=sys.stderr)
+        said = claim_stop_key(pressed)
+        if said:
+            print(f"! Ctrl+Alt+Q could not be claimed: {said}", file=sys.stderr)
     worker = threading.Thread(target=connection.run, daemon=True)
     worker.start()
-    while worker.is_alive():
-        worker.join(0.5)
+    try:
+        while worker.is_alive():
+            worker.join(0.5)
+    finally:
+        accessibility_back()
     return 0
 
 

@@ -248,7 +248,4 @@ class StopHotkey:
                 self.on_press()
 
 
-def session_is_wayland() -> bool:
-    """A Wayland session, where X11 input reaches only XWayland windows and so is not offered at all."""
-    return os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland" or (
-        bool(os.environ.get("WAYLAND_DISPLAY")) and not os.environ.get("ORKNUX_FORCE_X11"))
+from .session import session_is_wayland  # noqa: E402,F401 - where it was, for anything that imports it from here

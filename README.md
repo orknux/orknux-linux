@@ -7,16 +7,43 @@ the server through the same door, so an agent given the `desktop_*` tools uses
 whichever computer you have connected.
 
 Your agents act as you, on this computer, while it is connected. A strip at
-the top of the screen says when one is acting, and **Ctrl+Alt+Q** stops it at
-once, wherever the focus is.
+the top of the screen - a notification on Wayland - says when one is acting,
+and **Ctrl+Alt+Q** stops it at once, wherever the focus is.
 
-## X11 only, for now
+## X11 and Wayland
 
-Clicking, typing, pressing keys, screenshots and moving windows need an **X11
-session**. On Wayland, input from one program to another is not allowed the way
-X11 allows it, so Orknux for Linux there can list windows and read them with
-`desktop_snapshot`, and refuses the rest in words. On GNOME, choose **GNOME on
-Xorg** from the gear on the sign-in screen.
+Both. On Wayland it needs the XDG desktop portals, which GNOME and KDE Plasma
+ship; it is tested on GNOME (Shell 50). KDE implements the same portals and
+should work, except that bringing a window forward is done GNOME's way and is
+untested there.
+
+On **Wayland** no program may send input to another or read the screen on its
+own, so Orknux for Linux asks the desktop through its portals:
+
+- The first time an agent needs the keyboard or the mouse, the desktop asks
+  whether to allow **remote interaction**. Allow it, with *Remember This
+  Selection*; the answer is kept, and later starts do not ask again. GNOME
+  shows its screen-sharing icon in the top bar while it is in use, and
+  *Stop Screen Sharing* there takes it back at once.
+- Ctrl+Alt+Q is registered through the desktop's global shortcuts, which asks
+  once to confirm it.
+- A control is clicked and a field filled through accessibility, by the
+  control itself rather than at a point on the screen - so Polish or any other
+  letters arrive exactly, and it works on a window that is not in front.
+  Keys, a click at a point and the mouse wheel go through the portal.
+- Screenshots come from the same screen share, so they ask nothing more. A
+  window's screenshot is the whole screen: Wayland tells no program where
+  another's window is.
+- GNOME raises no window at another program's request, so a window is
+  brought forward the way a person does it, by clicking its app in the dock or
+  the overview.
+
+On **X11** it works through XTest and the window manager, and asks nothing.
+
+Either way it switches the desktop's accessibility on when it starts, as a
+screen reader does, and back off when it stops: most programs publish what
+they show only when asked. One already running before Orknux for Linux started
+may have to be restarted before its windows can be read.
 
 ## Install
 
@@ -25,12 +52,14 @@ and Ubuntu:
 
 ```
 sudo apt install python3-gi gir1.2-atspi-2.0 gir1.2-gtk-3.0 at-spi2-core \
-                 python3-xlib python3-pil xclip pipx
+                 python3-xlib python3-pil xclip pipx \
+                 gir1.2-gstreamer-1.0 gstreamer1.0-pipewire
 pipx install --system-site-packages ./orknux-linux
 ```
 
 `--system-site-packages` is what lets it see `python3-gi`, which is not on
-PyPI. `xclip` is needed for text with letters past ASCII (ą, ż, ñ), which is
+PyPI. The GStreamer packages are what a Wayland screenshot is read with, and
+are on every Ubuntu desktop already; `python3-xlib` and `xclip` are for X11. `xclip` is needed for text with letters past ASCII (ą, ż, ñ), which is
 pasted rather than typed and your clipboard's text put back afterwards.
 `pipx inject orknux-linux keyring` keeps the credential in your desktop's
 keyring; without it, it is in `~/.config/orknux/credential`, readable only by you.
@@ -70,10 +99,16 @@ compositor, so the answer says how the picture was taken.
 ## Checking it
 
 ```
-test/run.sh
+test/run.sh            # X11
+test/wayland/run.sh    # Wayland
 ```
 
 Builds a Debian image with Xvfb, openbox and the accessibility bus, runs the
 unit tests, then starts the client against a stub Orknux and drives a real GTK
 window through every action - including Polish text, the clipboard put back,
 and Ctrl+Alt+Q.
+
+`test/wayland/run.sh` does the same on Wayland: GNOME Shell itself, headless
+on a virtual monitor, with PipeWire and the GNOME portals, the desktop's
+questions answered through accessibility as a person would answer them, and a
+second start checked to ask nothing.

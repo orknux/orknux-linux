@@ -68,12 +68,21 @@ def states_of(element) -> list[str]:
     return said
 
 
-def text_of(element) -> str | None:
+def _implements(element, interface: str) -> bool:
     try:
-        text = element.get_text_iface()
-        if text is None:
-            return None
-        return text.get_text(0, text.get_character_count())
+        return interface in (element.get_interfaces() or [])
+    except Exception:
+        return False
+
+
+# Every interface is called as Atspi.Text.get_text(element, ...), never through get_text_iface(): from
+# libatspi 2.5x the iface getters hand back the element itself, whose own get_text() is a deprecated method
+# with another signature, so the old spelling failed - silently, as nothing but None - on current desktops.
+def text_of(element) -> str | None:
+    if not _implements(element, "Text"):
+        return None
+    try:
+        return Atspi.Text.get_text(element, 0, Atspi.Text.get_character_count(element))
     except Exception:
         return None
 
@@ -158,7 +167,7 @@ def tree(frame, table: RefTable) -> tuple[SnapNode, int]:
 def extents(element) -> tuple[int, int, int, int] | None:
     """Where the element is on the screen, or None when it does not say."""
     try:
-        box = element.get_extents(Atspi.CoordType.SCREEN)
+        box = Atspi.Component.get_extents(element, Atspi.CoordType.SCREEN)
     except Exception:
         return None
     if box.width <= 0 or box.height <= 0:
@@ -168,17 +177,173 @@ def extents(element) -> tuple[int, int, int, int] | None:
 
 def grab_focus(element) -> bool:
     try:
-        return bool(element.grab_focus())
+        return _implements(element, "Component") and bool(Atspi.Component.grab_focus(element))
     except Exception:
         return False
 
 
 def activate(element) -> bool:
     """Its first action - press, click, activate - for an element that has no place on the screen to click."""
+    if not _implements(element, "Action"):
+        return False
     try:
-        action = element.get_action_iface()
-        if action is not None and action.get_n_actions() > 0:
-            return bool(action.do_action(0))
+        return Atspi.Action.get_n_actions(element) > 0 and bool(Atspi.Action.do_action(element, 0))
     except Exception:
-        pass
+        return False
+
+
+# ---- what Wayland needs: acting on a control through accessibility rather than through input ----
+
+def has_state(element, name: str) -> bool:
+    return _has(element, getattr(Atspi.StateType, name))
+
+
+def frames_by_key():
+    """Every top-level frame with a key that stays the same while it lives: its process and its object path."""
+    for pid, frame in frames():
+        try:
+            path = frame.path
+        except Exception:
+            path = None
+        yield (pid, path or name_of(frame)), pid, frame
+
+
+# The action a click on a control means, by the names toolkits give it, in order of preference.
+CLICK_ACTIONS = ("click", "press", "activate", "jump", "toggle", "open", "select")
+MENU_ACTIONS = ("show menu", "showmenu", "menu", "context menu")
+
+
+def actions_of(element) -> list[str]:
+    if not _implements(element, "Action"):
+        return []
+    try:
+        return [(Atspi.Action.get_action_name(element, i) or "").lower() for i in range(Atspi.Action.get_n_actions(element))]
+    except Exception:
+        return []
+
+
+def do_action(element, wanted: tuple[str, ...]) -> str | None:
+    """Does the first of [wanted] the element offers, or its first action when it names none of them; which, or None."""
+    names = actions_of(element)
+    if not names:
+        return None
+    index = next((names.index(w) for w in wanted if w in names), None)
+    if index is None:
+        if wanted is MENU_ACTIONS:
+            return None
+        index = 0
+    try:
+        return names[index] if Atspi.Action.do_action(element, index) else None
+    except Exception:
+        return None
+
+
+def set_text(element, text: str, append: bool) -> bool:
+    """Replaces or extends what a field holds, through its EditableText, and checks it took."""
+    if not _implements(element, "EditableText"):
+        return False
+    before = text_of(element) or ""
+    try:
+        if append:
+            done = Atspi.EditableText.insert_text(element, len(before), text, len(text.encode("utf-8")))
+        else:
+            done = Atspi.EditableText.set_text_contents(element, text)
+    except Exception:
+        return False
+    after = text_of(element)
+    expected = before + text if append else text
+    return bool(done) and after == expected
+
+
+def walk(element, depth: int = 12):
+    yield element
+    if depth <= 0:
+        return
+    for child in children(element):
+        yield from walk(child, depth - 1)
+
+
+def scroll_bars(element) -> list:
+    return [e for e in walk(element) if role_of(e) == "scrollbar"]
+
+
+def scroll_by_value(element, vertical: bool, notches: int) -> bool:
+    """Moves the first scroll bar in [element] that runs the right way by [notches] steps; whether one moved."""
+    for bar in scroll_bars(element):
+        horizontal = has_state(bar, "HORIZONTAL")
+        if horizontal == vertical:
+            continue
+        if not _implements(bar, "Value"):
+            continue
+        try:
+            low, high = Atspi.Value.get_minimum_value(bar), Atspi.Value.get_maximum_value(bar)
+            now = Atspi.Value.get_current_value(bar)
+            step = Atspi.Value.get_minimum_increment(bar) or 0
+            if step <= 0:
+                step = max((high - low) / 20, 1)
+            return bool(Atspi.Value.set_current_value(bar, max(low, min(high, now + notches * step * 3))))
+        except Exception:
+            continue
     return False
+
+
+CLOSE_NAMES = {"close", "zamknij", "schließen", "fermer", "cerrar", "chiudi", "fechar", "закрыть", "sluiten"}
+
+
+def close_button(frame):
+    """The window's own Close button, where its toolkit draws one (GTK's header bar, libadwaita)."""
+    for element in walk(frame, 8):
+        if role_of(element) == "button" and name_of(element).strip().lower() in CLOSE_NAMES:
+            return element
+    return None
+
+
+def enable_accessibility() -> bool | None:
+    """
+    Asks every program started from now on to publish what it shows, as a
+    screen reader does; most do not unless asked. The value it had before,
+    so it can be put back, or None when the bus could not be reached.
+    """
+    try:
+        from gi.repository import Gio, GLib
+
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        reply = bus.call_sync("org.a11y.Bus", "/org/a11y/bus", "org.freedesktop.DBus.Properties", "Get",
+                              GLib.Variant("(ss)", ("org.a11y.Status", "IsEnabled")), None, Gio.DBusCallFlags.NONE, 2000, None)
+        was = bool(reply.unpack()[0])
+        if not was:
+            set_accessibility(True)
+        return was
+    except Exception:
+        return None
+
+
+def set_accessibility(on: bool):
+    from gi.repository import Gio, GLib
+
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    bus.call_sync("org.a11y.Bus", "/org/a11y/bus", "org.freedesktop.DBus.Properties", "Set",
+                  GLib.Variant("(ssv)", ("org.a11y.Status", "IsEnabled", GLib.Variant("b", on))), None,
+                  Gio.DBusCallFlags.NONE, 2000, None)
+
+
+def insert_at_caret(element, text: str) -> bool:
+    """
+    Types [text] where the caret is, through accessibility, replacing what is
+    selected as a keystroke would; whether the field now holds it.
+    """
+    if not (_implements(element, "EditableText") and _implements(element, "Text")):
+        return False
+    try:
+        if Atspi.Text.get_n_selections(element) > 0:
+            chosen = Atspi.Text.get_selection(element, 0)
+            if chosen.end_offset > chosen.start_offset:
+                Atspi.EditableText.delete_text(element, chosen.start_offset, chosen.end_offset)
+        caret = max(0, Atspi.Text.get_caret_offset(element))
+        before = text_of(element) or ""
+        if not Atspi.EditableText.insert_text(element, caret, text, len(text.encode("utf-8"))):
+            return False
+        Atspi.Text.set_caret_offset(element, caret + len(text))
+        return (text_of(element) or "") == before[:caret] + text + before[caret:]
+    except Exception:
+        return False

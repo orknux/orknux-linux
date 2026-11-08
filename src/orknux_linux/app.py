@@ -186,6 +186,16 @@ class MainWindow(Gtk.Window):
         claim = threading.Thread(target=lambda: self._claimed(claim_stop_key(
             lambda: GLib.idle_add(self.stop, "Stopped with Ctrl+Alt+Q.", True))), daemon=True)
         claim.start()
+        # An Orknux on this computer is found and its address filled in, where nothing is there yet.
+        if not self.server.get_text().strip():
+            def look():
+                from .core.pairing import find_local
+
+                found = find_local()
+                if found:
+                    GLib.idle_add(lambda: (self.server.get_text().strip() or self.server.set_text(found), False)[1])
+
+            threading.Thread(target=look, daemon=True).start()
         # Connected when it last ran, and not disconnected since: connect again by itself, as it was.
         if self.settings.reconnect and self.settings.server and self.settings.token:
             GLib.idle_add(self.start)
